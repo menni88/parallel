@@ -1,0 +1,186 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <mpi.h>
+
+#define no_of_vertices 10
+#define proc_vertices 5
+#define BUFFER_SIZE 10
+
+struct vertix
+{
+    int v;
+    int level;
+};
+
+void distributed_BFS(struct vertix local[], int size, int adj_matrix[no_of_vertices][no_of_vertices], int source, int rank, int visited_order[]);
+int getOwner(int vertexIndex);
+
+int main(int argc, char *argv[])
+{
+    int size, rank;
+    int adjacency_matrix[10][10] = {
+         {0, 1, 1, 0, 0, 0, 0, 0, 0, 0},
+        {1, 0, 0, 1, 1, 0, 0, 0, 0, 0},
+        {1, 0, 0, 0, 0, 1, 1, 0, 0, 0},
+        {0, 1, 0, 0, 0, 0, 0, 1, 0, 0},
+        {0, 1, 0, 0, 0, 0, 0, 1, 0, 0},
+        {0, 0, 1, 0, 0, 0, 0, 0, 1, 1},
+        {0, 0, 1, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 1, 1, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 1, 0, 0, 0, 1},
+        {0, 0, 0, 0, 0, 1, 0, 0, 1, 0}};
+    struct vertix verticies[no_of_vertices] ={
+        {1, -1},
+        {2, -1},
+        {3, -1},
+        {4, -1},
+        {5, -1},
+        {6, -1},
+        {7, -1},
+        {8, -1},
+        {9, -1},
+        {10, -1}};
+    int visited_order[no_of_vertices];
+    int source_vertex=0;
+    struct vertix local_V;
+
+    // MPI Code
+    MPI_Init(&argc, &argv);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+    if (rank == 0)
+    {
+
+        int blockSize = (rank == size - 1) ? (no_of_vertices - (rank * proc_vertices)) : proc_vertices;
+
+        MPI_Bcast(&source_vertex, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Scatter(&verticies, proc_vertices * sizeof(struct vertix), MPI_INT, &local_V, blockSize * sizeof(struct vertix), MPI_INT, 0, MPI_COMM_WORLD);
+    }
+
+
+    MPI_Barrier(MPI_COMM_WORLD);
+
+
+    for (int i = 0; i < no_of_vertices; i++)
+    {
+        visited_order[i] = -1;
+    }
+
+
+    distributed_BFS(&local_V, size, adjacency_matrix, source_vertex, rank, visited_order);
+  
+    printf("rank %d local %d", rank, local_V);
+  
+  
+    if (rank == 0)
+    {
+        int gathered_order[size * no_of_vertices];
+        MPI_Gather(visited_order, no_of_vertices, MPI_INT, gathered_order, no_of_vertices, MPI_INT, 0, MPI_COMM_WORLD);
+        printf("\nVisited Vertices in Order: ");
+        for (int i = 0; i < size * no_of_vertices; i++)
+        {
+            if (gathered_order[i] != -1)
+            {
+                printf("%d ", gathered_order[i] + 1);
+            }
+        }
+        printf("\n");
+    }
+
+    MPI_Finalize();
+    return 0;
+}
+
+int getOwner(int vertexIndex)
+{
+    int process = vertexIndex / proc_vertices;
+    return process;
+}
+
+void distributed_BFS(struct vertix local[], int size, int adj_matrix[no_of_vertices][no_of_vertices], int source, int rank, int visited_order[])
+{
+    int frontier[no_of_vertices];
+    int next_frontier[no_of_vertices];
+    int current_level = 0;
+    int sendbuffer[BUFFER_SIZE][no_of_vertices];
+    int recbuffer[BUFFER_SIZE][no_of_vertices];
+    int k_indices[size];
+    int sum;
+    int visited_count = 0;
+    for (int i = 0; i < size; i++)
+    {
+        k_indices[i] = 0;
+    }
+    //  source = source -1;
+    int frontierSize = 0;
+
+
+    if (rank == getOwner(source))
+    {
+        local[source].level = 0;
+        frontier[0] = source;
+        visited_order[visited_count++] = source;
+    }
+
+    while (1)
+    {
+        
+       for (int i = 0; i < sizeof(frontier) / sizeof(frontier[i]); i++) {
+    // Check if frontier[i] is a valid index for adj_matrix
+    if (frontier[i] >= 0 && frontier[i] < no_of_vertices) {
+        for (int j = 0; j < no_of_vertices; j++) {
+            // Check if j is a valid index for adj_matrix, sendbuffer, and visited_order
+            if (j >= 0 && j < no_of_vertices) {
+                if (adj_matrix[frontier[i]][j] == 1) {
+                    int rank = getOwner(j + 1);
+                    sendbuffer[rank][k_indices[rank]++] = j;
+                    visited_order[visited_count++] = j;
+                }
+            } else {
+                printf("Invalid index j: %d\n", j);
+            }
+        }
+    } else {
+        printf("Invalid index frontier[%d]: %d\n", i, frontier[i]);
+    }
+}
+
+        MPI_Alltoall(&sendbuffer, k_indices[rank], MPI_INT,
+                     &recbuffer,k_indices[rank], MPI_INT,
+                     MPI_COMM_WORLD);
+
+        for (int i = 0; i < k_indices[rank]; i++)
+        {
+            next_frontier[i] = recbuffer[rank][i];
+            frontier[i] = 0;
+        }
+
+        for (int i = 0; i < k_indices[rank]; i++)
+        {
+            if (local[next_frontier[i]].level == -1)
+            {
+                local[next_frontier[i]].level = current_level + 1;
+                frontier[i] = next_frontier[i];
+            }
+        }
+
+        for (int i = 0; i < sizeof(next_frontier) / sizeof(int); i++)
+        {
+            next_frontier[i] = 0;
+        }
+
+        current_level++;
+
+        frontierSize = k_indices[rank];
+
+        MPI_Allreduce(&frontierSize, &sum, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+
+        if (sum == 0)
+        {
+            break;
+        }
+
+        k_indices[rank]=0;
+    }
+}
